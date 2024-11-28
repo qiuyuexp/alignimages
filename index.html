@@ -411,104 +411,84 @@
             const container = document.getElementById('alignmentPoints');
             container.innerHTML = '<h3>Alignment Points Visualization:</h3>';
 
-            // Find the overlapping region based on the transformed points we used for resultCanvas
-            let commonAreas = new Array(uploadedImages.length);
-
-            // For first image, use its original coordinates
-            commonAreas[0] = {
-                minX: 0,
-                minY: 0,
-                maxX: uploadedImages[0].element.width,
-                maxY: uploadedImages[0].element.height
-            };
-
-            // For subsequent images, use the transformed points we calculated for resultCanvas
-            for (let i = 1; i < uploadedImages.length; i++) {
-                const transformedPoints = [
-                    [0, 0],
-                    [uploadedImages[i].element.width, 0],
-                    [uploadedImages[i].element.width, uploadedImages[i].element.height],
-                    [0, uploadedImages[i].element.height]
-                ].map(point => {
-                    const srcPoint = cv.matFromArray(1, 1, cv.CV_32FC2, [point[0], point[1]]);
-                    const dstPoint = new cv.Mat();
-                    cv.perspectiveTransform(srcPoint, dstPoint, homographies[i-1]);
-                    const x = dstPoint.data32F[0];
-                    const y = dstPoint.data32F[1];
-                    srcPoint.delete();
-                    dstPoint.delete();
-                    return [x, y];
-                });
-
-                // Find bounds of transformed image
-                let minX = Math.min(...transformedPoints.map(p => p[0]));
-                let minY = Math.min(...transformedPoints.map(p => p[1]));
-                let maxX = Math.max(...transformedPoints.map(p => p[0]));
-                let maxY = Math.max(...transformedPoints.map(p => p[1]));
-
-                commonAreas[i] = {
-                    minX: minX,
-                    minY: minY,
-                    maxX: maxX,
-                    maxY: maxY
-                };
-            }
-
-            // Calculate the intersection of all areas
-            let intersectionArea = {
-                minX: -Infinity,
-                minY: -Infinity,
-                maxX: Infinity,
-                maxY: Infinity
-            };
-
-            commonAreas.forEach(area => {
-                intersectionArea.minX = Math.max(intersectionArea.minX, area.minX);
-                intersectionArea.minY = Math.max(intersectionArea.minY, area.minY);
-                intersectionArea.maxX = Math.min(intersectionArea.maxX, area.maxX);
-                intersectionArea.maxY = Math.min(intersectionArea.maxY, area.maxY);
-            });
-
-            // Transform intersection area back to each image's original space
-            commonAreas[0] = intersectionArea;  // First image is reference
-
-            for (let i = 1; i < uploadedImages.length; i++) {
-                // Invert homography matrix
-                let invH = new cv.Mat();
-                cv.invert(homographies[i-1], invH);
-
-                // Transform intersection corners back
-                const corners = [
-                    [intersectionArea.minX, intersectionArea.minY],
-                    [intersectionArea.maxX, intersectionArea.minY],
-                    [intersectionArea.maxX, intersectionArea.maxY],
-                    [intersectionArea.minX, intersectionArea.maxY]
-                ].map(point => {
-                    const srcPoint = cv.matFromArray(1, 1, cv.CV_32FC2, [point[0], point[1]]);
-                    const dstPoint = new cv.Mat();
-                    cv.perspectiveTransform(srcPoint, dstPoint, invH);
-                    const x = dstPoint.data32F[0];
-                    const y = dstPoint.data32F[1];
-                    srcPoint.delete();
-                    dstPoint.delete();
-                    return [x, y];
-                });
-
-                // Find bounds in original space
-                commonAreas[i] = {
-                    minX: Math.min(...corners.map(p => p[0])),
-                    minY: Math.min(...corners.map(p => p[1])),
-                    maxX: Math.max(...corners.map(p => p[0])),
-                    maxY: Math.max(...corners.map(p => p[1]))
-                };
-
-                invH.delete();
-            }
-
+            // Calculate rotation angle and center for each image based on the matched points
             uploadedImages.forEach((img, index) => {
                 const imageDiv = document.createElement('div');
                 imageDiv.style.marginBottom = '30px';
                 imageDiv.innerHTML = `<h4>Image ${index + 1}</h4>`;
+
+                // Create canvas for visualization
+                const canvas = document.createElement('canvas');
+                canvas.width = img.element.width;
+                canvas.height = img.element.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img.element, 0, 0);
+
+                // Calculate rotation angle from points
+                let angle = 0;
+                if (index > 0 && points[index].length >= 2) {
+                    // Calculate angle between corresponding points in reference and current image
+                    const dx1 = points[0][1][0] - points[0][0][0];
+                    const dy1 = points[0][1][1] - points[0][0][1];
+                    const dx2 = points[index][1][0] - points[index][0][0];
+                    const dy2 = points[index][1][1] - points[index][0][1];
+                    
+                    angle = Math.atan2(dy2, dx2) - Math.atan2(dy1, dx1);
+                }
+
+                // Draw rotated points and their connections
+                ctx.save();
+                if (index > 0) {
+                    // Find center point of the image
+                    const centerX = img.element.width / 2;
+                    const centerY = img.element.height / 2;
+                    
+                    // Translate to center, rotate, and translate back
+                    ctx.translate(centerX, centerY);
+                    ctx.rotate(angle);
+                    ctx.translate(-centerX, -centerY);
+                }
+
+                // Draw points with numbers
+                points[index].forEach((point, i) => {
+                    // Draw point
+                    ctx.beginPath();
+                    ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#ff0000';
+                    ctx.fill();
+
+                    // Draw point number
+                    ctx.font = '12px Arial';
+                    ctx.fillStyle = 'white';
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 2;
+                    ctx.strokeText(`${i + 1}`, point[0] + 5, point[1] - 5);
+                    ctx.fillText(`${i + 1}`, point[0] + 5, point[1] - 5);
+                });
+
+                // Connect points with lines to show rotation
+                ctx.beginPath();
+                ctx.moveTo(points[index][0][0], points[index][0][1]);
+                for (let i = 1; i < points[index].length; i++) {
+                    ctx.lineTo(points[index][i][0], points[index][i][1]);
+                }
+                ctx.closePath();
+                ctx.strokeStyle = '#00ff00';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Add rotation angle information
+                if (index > 0) {
+                    const angleText = `Rotation: ${(angle * 180 / Math.PI).toFixed(2)}°`;
+                    ctx.font = '14px Arial';
+                    ctx.fillStyle = 'white';
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 3;
+                    ctx.strokeText(angleText, 10, 20);
+                    ctx.fillText(angleText, 10, 20);
+                }
+
+                ctx.restore();
 
                 // Add point coordinates table
                 const coordTable = document.createElement('table');
@@ -530,61 +510,11 @@
                     `).join('')}
                 `;
                 imageDiv.appendChild(coordTable);
-
-                const canvas = document.createElement('canvas');
-                canvas.width = img.element.width;
-                canvas.height = img.element.height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img.element, 0, 0);
-
-                // Draw points with numbers
-                points[index].forEach((point, i) => {
-                    // Draw point
-                    ctx.beginPath();
-                    ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
-                    ctx.fillStyle = '#ff0000';
-                    ctx.fill();
-
-                    // Draw point number
-                    ctx.font = '12px Arial';
-                    ctx.fillStyle = 'white';
-                    ctx.strokeStyle = 'black';
-                    ctx.lineWidth = 2;
-                    ctx.strokeText(`${i + 1}`, point[0] + 5, point[1] - 5);
-                    ctx.fillText(`${i + 1}`, point[0] + 5, point[1] - 5);
-                });
-
-                // Draw rectangle for overlap area
-                const area = commonAreas[index];
-                ctx.strokeStyle = '#00ff00';  // Green color
-                ctx.lineWidth = 2;
-                ctx.setLineDash([5, 5]);  // Dashed line
-                ctx.beginPath();
-                ctx.rect(
-                    area.minX,
-                    area.minY,
-                    area.maxX - area.minX,
-                    area.maxY - area.minY
-                );
-                ctx.stroke();
-                ctx.setLineDash([]);  // Reset to solid line
-
-                // Add overlap area dimensions
-                const dimensionsText = `Overlap Area: ${(area.maxX - area.minX).toFixed(0)}×${(area.maxY - area.minY).toFixed(0)} pixels`;
-                ctx.font = '14px Arial';
-                ctx.fillStyle = 'white';
-                ctx.strokeStyle = 'black';
-                ctx.lineWidth = 3;
-                const textX = area.minX;
-                const textY = area.minY - 10;
-                ctx.strokeText(dimensionsText, textX, textY);
-                ctx.fillText(dimensionsText, textX, textY);
-
                 imageDiv.appendChild(canvas);
                 container.appendChild(imageDiv);
             });
 
-            // Add single download button at the bottom
+            // Add download button
             const downloadAllBtn = document.createElement('button');
             downloadAllBtn.textContent = 'Download All Cropped Images';
             downloadAllBtn.style.display = 'block';
@@ -597,37 +527,73 @@
             downloadAllBtn.style.cursor = 'pointer';
             downloadAllBtn.style.fontSize = '16px';
             downloadAllBtn.onclick = function() {
-                // Create a zip file containing all cropped images
                 const zip = new JSZip();
 
-                // Add each cropped image to the zip
-                uploadedImages.forEach((img, index) => {
-                    const area = commonAreas[index];
-                    
-                    // Create a temporary canvas for cropping
-                    const cropCanvas = document.createElement('canvas');
-                    cropCanvas.width = area.maxX - area.minX;
-                    cropCanvas.height = area.maxY - area.minY;
-                    const cropCtx = cropCanvas.getContext('2d');
+                // First, calculate the size that will be used for all images
+                let maxWidth = 0;
+                let maxHeight = 0;
+                uploadedImages.forEach(img => {
+                    maxWidth = Math.max(maxWidth, img.element.width);
+                    maxHeight = Math.max(maxHeight, img.element.height);
+                });
 
-                    // Draw the cropped portion of the original image
-                    cropCtx.drawImage(img.element,
-                        area.minX, area.minY,  // Source coordinates
-                        area.maxX - area.minX, area.maxY - area.minY,  // Source dimensions
-                        0, 0,  // Destination coordinates
-                        cropCanvas.width, cropCanvas.height  // Destination dimensions
-                    );
+                // Calculate the common size based on the maximum dimensions
+                const commonWidth = maxWidth;
+                const commonHeight = maxHeight;
+
+                // Create OpenCV matrices for the first (reference) image
+                const firstMat = cv.imread(uploadedImages[0].element);
+                
+                uploadedImages.forEach((img, index) => {
+                    // Create a canvas for the transformed image
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Set canvas size to the common size
+                    canvas.width = commonWidth;
+                    canvas.height = commonHeight;
+
+                    // Clear the canvas with white background
+                    ctx.fillStyle = 'white';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                    if (index === 0) {
+                        // For the reference image, just draw it directly
+                        ctx.drawImage(img.element, 0, 0);
+                    } else {
+                        // For other images, apply the same homography transformation as used in alignment
+                        const currentMat = cv.imread(img.element);
+                        const alignedMat = new cv.Mat();
+                        
+                        // Use the same homography matrix that was calculated during alignment
+                        cv.warpPerspective(
+                            currentMat,
+                            alignedMat,
+                            homographies[index-1],
+                            new cv.Size(commonWidth, commonHeight)
+                        );
+
+                        // Convert the OpenCV Mat to an image that can be drawn on canvas
+                        cv.imshow(canvas, alignedMat);
+
+                        // Clean up OpenCV matrices
+                        currentMat.delete();
+                        alignedMat.delete();
+                    }
 
                     // Convert canvas to blob and add to zip
-                    const imageData = cropCanvas.toDataURL('image/png').split(',')[1];
-                    zip.file(`cropped_image_${index + 1}.png`, imageData, {base64: true});
+                    const imageData = canvas.toDataURL('image/png').split(',')[1];
+                    zip.file(`aligned_image_${index + 1}.png`, imageData, {base64: true});
                 });
+
+                // Clean up the first OpenCV matrix
+                firstMat.delete();
 
                 // Generate and download the zip file
                 zip.generateAsync({type: 'blob'}).then(function(content) {
                     const link = document.createElement('a');
                     link.href = URL.createObjectURL(content);
-                    link.download = 'cropped_images.zip';
+                    link.download = 'aligned_images.zip';
                     link.click();
                 });
             };
