@@ -254,6 +254,15 @@
             alignmentPointsDiv.innerHTML = '';
         }
 
+        // Add configuration object for alignment parameters
+        const alignmentConfig = {
+            orbFeatures: 10000,        // Increased feature detection
+            matchRatio: 0.75,        // More relaxed matching threshold
+            ransacReprojThreshold: 0.8, // More tolerant of geometric variations
+            minMatches: 18,           // Lower minimum matches requirement
+            maxFeatures: 12300        // Increased upper limit
+        };
+
         async function alignImages() {
             if (isProcessing || uploadedImages.length < 2) return;
             isProcessing = true;
@@ -280,8 +289,14 @@
                     cv.cvtColor(currentImg, gray1, cv.COLOR_RGB2GRAY);
                     cv.cvtColor(referenceImg, gray2, cv.COLOR_RGB2GRAY);
 
+                    // Apply Gaussian blur to reduce noise
+                    const blurred1 = new cv.Mat();
+                    const blurred2 = new cv.Mat();
+                    cv.GaussianBlur(gray1, blurred1, new cv.Size(3, 3), 0);
+                    cv.GaussianBlur(gray2, blurred2, new cv.Size(3, 3), 0);
+
                     // Initialize ORB detector with increased number of features
-                    const orb = new cv.ORB(2000);  // Using more features for better matching
+                    const orb = new cv.ORB(alignmentConfig.orbFeatures);
                     
                     const keypoints1 = new cv.KeyPointVector();
                     const keypoints2 = new cv.KeyPointVector();
@@ -290,31 +305,48 @@
 
                     // Detect keypoints and compute descriptors
                     const mask = new cv.Mat();
-                    orb.detectAndCompute(gray1, mask, keypoints1, descriptors1);
-                    orb.detectAndCompute(gray2, mask, keypoints2, descriptors2);
+                    orb.detectAndCompute(blurred1, mask, keypoints1, descriptors1);
+                    orb.detectAndCompute(blurred2, mask, keypoints2, descriptors2);
+
+                    // Sort keypoints by response strength
+                    const sortedKeypoints1 = Array.from({length: keypoints1.size()}, (_, i) => ({
+                        index: i,
+                        response: keypoints1.get(i).response
+                    })).sort((a, b) => b.response - a.response)
+                      .slice(0, alignmentConfig.maxFeatures);
+
+                    const sortedKeypoints2 = Array.from({length: keypoints2.size()}, (_, i) => ({
+                        index: i,
+                        response: keypoints2.get(i).response
+                    })).sort((a, b) => b.response - a.response)
+                      .slice(0, alignmentConfig.maxFeatures);
 
                     // Match descriptors using k-nearest neighbors
                     const matcher = new cv.BFMatcher(cv.NORM_HAMMING);
                     const matches = new cv.DMatchVectorVector();
                     matcher.knnMatch(descriptors1, descriptors2, matches, 2);
 
-                    // Apply ratio test for better match filtering
+                    // Apply ratio test with configurable threshold
                     const good_matches = [];
-                    const ratio = 0.75;
                     
                     for (let j = 0; j < matches.size(); j++) {
                         const match_vec = matches.get(j);
                         if (match_vec.size() >= 2) {
                             const m = match_vec.get(0);  // Best match
                             const n = match_vec.get(1);  // Second best match
-                            if (m.distance < ratio * n.distance) {
+                            
+                            // Check if the keypoints are in our sorted lists
+                            const queryInList = sortedKeypoints1.some(k => k.index === m.queryIdx);
+                            const trainInList = sortedKeypoints2.some(k => k.index === m.trainIdx);
+                            
+                            if (queryInList && trainInList && m.distance < alignmentConfig.matchRatio * n.distance) {
                                 good_matches.push(m);
                             }
                         }
                     }
 
-                    if (good_matches.length < 4) {
-                        throw new Error('Not enough good matches found between images');
+                    if (good_matches.length < alignmentConfig.minMatches) {
+                        throw new Error(`Not enough good matches found between images (${good_matches.length} < ${alignmentConfig.minMatches})`);
                     }
 
                     // Extract location of good matches
@@ -334,10 +366,10 @@
                     const dstPoints = cv.matFromArray(points2.length, 1, cv.CV_32FC2, 
                         points2.flatMap(p => [p.x, p.y]));
 
-                    // Find homography with RANSAC
-                    const H = cv.findHomography(srcPoints, dstPoints, cv.RANSAC, 3.0);
+                    // Find homography with RANSAC and configurable threshold
+                    const H = cv.findHomography(srcPoints, dstPoints, cv.RANSAC, alignmentConfig.ransacReprojThreshold);
                     
-                    // Store a copy of the homography matrix data
+                    // Store homography matrix
                     const hData = new Float32Array(H.data64F);
                     homographies.push(new cv.Mat(3, 3, cv.CV_32F));
                     homographies[i-1].data32F.set(hData);
@@ -364,6 +396,8 @@
                     // Cleanup
                     gray1.delete();
                     gray2.delete();
+                    blurred1.delete();
+                    blurred2.delete();
                     descriptors1.delete();
                     descriptors2.delete();
                     keypoints1.delete();
@@ -376,34 +410,35 @@
                     currentImg.delete();
                 }
 
+                // Create result canvas
+                resultCanvas.width = referenceImg.cols;
+                resultCanvas.height = referenceImg.rows;
+                
                 // Blend images
                 const result = new cv.Mat();
-                cv.addWeighted(alignedImages[0], 1/alignedImages.length, alignedImages[0], 0, 0, result);
-                for (let i = 1; i < alignedImages.length; i++) {
-                    cv.addWeighted(result, 1, alignedImages[i], 1/alignedImages.length, 0, result);
+                cv.addWeighted(alignedImages[0], 1.0 / uploadedImages.length, alignedImages[1], 1.0 / uploadedImages.length, 0, result);
+                for (let i = 2; i < alignedImages.length; i++) {
+                    cv.addWeighted(result, 1.0, alignedImages[i], 1.0 / uploadedImages.length, 0, result);
                 }
 
-                // Display result
-                cv.imshow('resultCanvas', result);
+                // Show result
+                cv.imshow(resultCanvas, result);
                 resultCanvas.style.display = 'block';
 
                 // Display alignment points
                 displayAlignmentPoints(alignmentPoints);
 
                 // Cleanup
-                alignedImages.forEach((img, i) => {
-                    if (i > 0) img.delete();
-                });
-                referenceImg.delete();
                 result.delete();
+                alignedImages.forEach(img => img.delete());
 
             } catch (err) {
                 console.error(err);
-                showError('Error processing images: ' + err.message);
+                showError('Error during alignment: ' + err.message);
             } finally {
-                isProcessing = false;
                 loading.style.display = 'none';
                 alignBtn.disabled = false;
+                isProcessing = false;
             }
         }
 
