@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Retinal Image Alignment (Frontend Only)</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        
+        .upload-section {
+            text-align: center;
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px dashed #ccc;
+            border-radius: 8px;
+        }
+        
+        .upload-section.dragover {
+            background-color: #e9ecef;
+            border-color: #007bff;
+        }
+        
+        #fileInput {
+            display: none;
+        }
+        
+        .upload-btn {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        
+        .upload-btn:hover {
+            background-color: #0056b3;
+        }
+        
+        .upload-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        #preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+            justify-content: center;
+        }
+        
+        .preview-image {
+            max-width: 200px;
+            max-height: 200px;
+            object-fit: contain;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        
+        #result {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 20px auto;
+            width: 100%;
+        }
+        
+        canvas {
+            max-width: 100%;
+            max-height: 600px;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .error {
+            color: red;
+            text-align: center;
+            margin: 10px 0;
+            display: none;
+        }
+
+        #alignmentPoints {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .point-set {
+            margin-bottom: 10px;
+            padding: 5px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        #status {
+            text-align: center;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Retinal Image Alignment (Frontend Only)</h1>
+        
+        <div id="status">Loading OpenCV.js...</div>
+        
+        <div class="upload-section" id="dropZone">
+            <input type="file" id="fileInput" multiple accept="image/*">
+            <button class="upload-btn" onclick="document.getElementById('fileInput').click()" disabled>
+                Select Images
+            </button>
+            <p>or drag and drop images here</p>
+            <p>(Select 2-5 retinal images)</p>
+        </div>
+        
+        <div id="preview"></div>
+        
+        <div style="text-align: center;">
+            <button class="upload-btn" id="alignBtn" style="display: none;">
+                Align Images
+            </button>
+        </div>
+        
+        <div class="loading" id="loading">
+            Processing images... Please wait...
+        </div>
+        
+        <div class="error" id="error"></div>
+        
+        <div id="result">
+            <canvas id="resultCanvas"></canvas>
+        </div>
+
+        <div id="alignmentPoints"></div>
+    </div>
+
+    <!-- Load OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+    <script src="https://unpkg.com/jszip@3.7.1/dist/jszip.min.js"></script>
+
+    <script>
+        let uploadedImages = [];
+        let isProcessing = false;
+        let homographies = [];
+
+        function onOpenCvReady() {
+            document.getElementById('status').textContent = 'OpenCV.js is ready.';
+            document.querySelector('.upload-btn').disabled = false;
+        }
+
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const preview = document.getElementById('preview');
+        const alignBtn = document.getElementById('alignBtn');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error');
+        const resultCanvas = document.getElementById('resultCanvas');
+        const alignmentPointsDiv = document.getElementById('alignmentPoints');
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            if (files.length < 2 || files.length > 5) {
+                showError('Please select 2-5 images');
+                return;
+            }
+            
+            preview.innerHTML = '';
+            uploadedImages = [];
+            
+            Array.from(files).forEach((file, index) => {
+                if (!file.type.startsWith('image/')) {
+                    showError('Please select only image files');
+                    return;
+                }
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        
+                        const previewImg = document.createElement('img');
+                        previewImg.classList.add('preview-image');
+                        previewImg.src = canvas.toDataURL();
+                        preview.appendChild(previewImg);
+                        
+                        uploadedImages.push({
+                            element: img,
+                            file: file,
+                            index: index
+                        });
+                        
+                        if (uploadedImages.length === files.length) {
+                            alignBtn.style.display = 'inline-block';
+                        }
+                    };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            });
+            
+            hideError();
+            resultCanvas.style.display = 'none';
+            alignmentPointsDiv.innerHTML = '';
+        }
+
+        async function alignImages() {
+            if (isProcessing || uploadedImages.length < 2) return;
+            isProcessing = true;
+            loading.style.display = 'block';
+            alignBtn.disabled = true;
+            hideError();
+
+            try {
+                const referenceImg = cv.imread(uploadedImages[0].element);
+                const alignedImages = [referenceImg];
+                const alignmentPoints = [[[0, 0], 
+                    [referenceImg.cols/2, referenceImg.rows/2],
+                    [referenceImg.cols-1, referenceImg.rows-1]]];
+
+                homographies = [];
+
+                // Process each image after the reference
+                for (let i = 1; i < uploadedImages.length; i++) {
+                    const currentImg = cv.imread(uploadedImages[i].element);
+                    
+                    // Convert to grayscale
+                    const gray1 = new cv.Mat();
+                    const gray2 = new cv.Mat();
+                    cv.cvtColor(currentImg, gray1, cv.COLOR_RGB2GRAY);
+                    cv.cvtColor(referenceImg, gray2, cv.COLOR_RGB2GRAY);
+
+                    // Initialize ORB detector with increased number of features
+                    const orb = new cv.ORB(2000);  // Using more features for better matching
+                    
+                    const keypoints1 = new cv.KeyPointVector();
+                    const keypoints2 = new cv.KeyPointVector();
+                    const descriptors1 = new cv.Mat();
+                    const descriptors2 = new cv.Mat();
+
+                    // Detect keypoints and compute descriptors
+                    const mask = new cv.Mat();
+                    orb.detectAndCompute(gray1, mask, keypoints1, descriptors1);
+                    orb.detectAndCompute(gray2, mask, keypoints2, descriptors2);
+
+                    // Match descriptors using k-nearest neighbors
+                    const matcher = new cv.BFMatcher(cv.NORM_HAMMING);
+                    const matches = new cv.DMatchVectorVector();
+                    matcher.knnMatch(descriptors1, descriptors2, matches, 2);
+
+                    // Apply ratio test for better match filtering
+                    const good_matches = [];
+                    const ratio = 0.75;
+                    
+                    for (let j = 0; j < matches.size(); j++) {
+                        const match_vec = matches.get(j);
+                        if (match_vec.size() >= 2) {
+                            const m = match_vec.get(0);  // Best match
+                            const n = match_vec.get(1);  // Second best match
+                            if (m.distance < ratio * n.distance) {
+                                good_matches.push(m);
+                            }
+                        }
+                    }
+
+                    if (good_matches.length < 4) {
+                        throw new Error('Not enough good matches found between images');
+                    }
+
+                    // Extract location of good matches
+                    const points1 = [];
+                    const points2 = [];
+                    for (let j = 0; j < good_matches.length; j++) {
+                        const match = good_matches[j];
+                        const point1 = keypoints1.get(match.queryIdx).pt;
+                        const point2 = keypoints2.get(match.trainIdx).pt;
+                        points1.push(point1);
+                        points2.push(point2);
+                    }
+
+                    // Convert points to the format needed by findHomography
+                    const srcPoints = cv.matFromArray(points1.length, 1, cv.CV_32FC2, 
+                        points1.flatMap(p => [p.x, p.y]));
+                    const dstPoints = cv.matFromArray(points2.length, 1, cv.CV_32FC2, 
+                        points2.flatMap(p => [p.x, p.y]));
+
+                    // Find homography with RANSAC
+                    const H = cv.findHomography(srcPoints, dstPoints, cv.RANSAC, 3.0);
+                    
+                    // Store a copy of the homography matrix data
+                    const hData = new Float32Array(H.data64F);
+                    homographies.push(new cv.Mat(3, 3, cv.CV_32F));
+                    homographies[i-1].data32F.set(hData);
+
+                    // Calculate transformed points for visualization
+                    const points = [[0, 0], 
+                        [currentImg.cols/2, currentImg.rows/2],
+                        [currentImg.cols-1, currentImg.rows-1]];
+                    
+                    const transformedPoints = points.map(point => {
+                        const x = (H.data64F[0] * point[0] + H.data64F[1] * point[1] + H.data64F[2]) /
+                                (H.data64F[6] * point[0] + H.data64F[7] * point[1] + H.data64F[8]);
+                        const y = (H.data64F[3] * point[0] + H.data64F[4] * point[1] + H.data64F[5]) /
+                                (H.data64F[6] * point[0] + H.data64F[7] * point[1] + H.data64F[8]);
+                        return [x, y];
+                    });
+                    alignmentPoints.push(transformedPoints);
+
+                    // Warp image
+                    const alignedImg = new cv.Mat();
+                    cv.warpPerspective(currentImg, alignedImg, H, new cv.Size(referenceImg.cols, referenceImg.rows));
+                    alignedImages.push(alignedImg);
+
+                    // Cleanup
+                    gray1.delete();
+                    gray2.delete();
+                    descriptors1.delete();
+                    descriptors2.delete();
+                    keypoints1.delete();
+                    keypoints2.delete();
+                    matches.delete();
+                    mask.delete();
+                    srcPoints.delete();
+                    dstPoints.delete();
+                    H.delete();
+                    currentImg.delete();
+                }
+
+                // Blend images
+                const result = new cv.Mat();
+                cv.addWeighted(alignedImages[0], 1/alignedImages.length, alignedImages[0], 0, 0, result);
+                for (let i = 1; i < alignedImages.length; i++) {
+                    cv.addWeighted(result, 1, alignedImages[i], 1/alignedImages.length, 0, result);
+                }
+
+                // Display result
+                cv.imshow('resultCanvas', result);
+                resultCanvas.style.display = 'block';
+
+                // Display alignment points
+                displayAlignmentPoints(alignmentPoints);
+
+                // Cleanup
+                alignedImages.forEach((img, i) => {
+                    if (i > 0) img.delete();
+                });
+                referenceImg.delete();
+                result.delete();
+
+            } catch (err) {
+                console.error(err);
+                showError('Error processing images: ' + err.message);
+            } finally {
+                isProcessing = false;
+                loading.style.display = 'none';
+                alignBtn.disabled = false;
+            }
+        }
+
+        function displayAlignmentPoints(points) {
+            const container = document.getElementById('alignmentPoints');
+            container.innerHTML = '<h3>Alignment Points Visualization:</h3>';
+
+            // Find the overlapping region based on the transformed points we used for resultCanvas
+            let commonAreas = new Array(uploadedImages.length);
+
+            // For first image, use its original coordinates
+            commonAreas[0] = {
+                minX: 0,
+                minY: 0,
+                maxX: uploadedImages[0].element.width,
+                maxY: uploadedImages[0].element.height
+            };
+
+            // For subsequent images, use the transformed points we calculated for resultCanvas
+            for (let i = 1; i < uploadedImages.length; i++) {
+                const transformedPoints = [
+                    [0, 0],
+                    [uploadedImages[i].element.width, 0],
+                    [uploadedImages[i].element.width, uploadedImages[i].element.height],
+                    [0, uploadedImages[i].element.height]
+                ].map(point => {
+                    const srcPoint = cv.matFromArray(1, 1, cv.CV_32FC2, [point[0], point[1]]);
+                    const dstPoint = new cv.Mat();
+                    cv.perspectiveTransform(srcPoint, dstPoint, homographies[i-1]);
+                    const x = dstPoint.data32F[0];
+                    const y = dstPoint.data32F[1];
+                    srcPoint.delete();
+                    dstPoint.delete();
+                    return [x, y];
+                });
+
+                // Find bounds of transformed image
+                let minX = Math.min(...transformedPoints.map(p => p[0]));
+                let minY = Math.min(...transformedPoints.map(p => p[1]));
+                let maxX = Math.max(...transformedPoints.map(p => p[0]));
+                let maxY = Math.max(...transformedPoints.map(p => p[1]));
+
+                commonAreas[i] = {
+                    minX: minX,
+                    minY: minY,
+                    maxX: maxX,
+                    maxY: maxY
+                };
+            }
+
+            // Calculate the intersection of all areas
+            let intersectionArea = {
+                minX: -Infinity,
+                minY: -Infinity,
+                maxX: Infinity,
+                maxY: Infinity
+            };
+
+            commonAreas.forEach(area => {
+                intersectionArea.minX = Math.max(intersectionArea.minX, area.minX);
+                intersectionArea.minY = Math.max(intersectionArea.minY, area.minY);
+                intersectionArea.maxX = Math.min(intersectionArea.maxX, area.maxX);
+                intersectionArea.maxY = Math.min(intersectionArea.maxY, area.maxY);
+            });
+
+            // Transform intersection area back to each image's original space
+            commonAreas[0] = intersectionArea;  // First image is reference
+
+            for (let i = 1; i < uploadedImages.length; i++) {
+                // Invert homography matrix
+                let invH = new cv.Mat();
+                cv.invert(homographies[i-1], invH);
+
+                // Transform intersection corners back
+                const corners = [
+                    [intersectionArea.minX, intersectionArea.minY],
+                    [intersectionArea.maxX, intersectionArea.minY],
+                    [intersectionArea.maxX, intersectionArea.maxY],
+                    [intersectionArea.minX, intersectionArea.maxY]
+                ].map(point => {
+                    const srcPoint = cv.matFromArray(1, 1, cv.CV_32FC2, [point[0], point[1]]);
+                    const dstPoint = new cv.Mat();
+                    cv.perspectiveTransform(srcPoint, dstPoint, invH);
+                    const x = dstPoint.data32F[0];
+                    const y = dstPoint.data32F[1];
+                    srcPoint.delete();
+                    dstPoint.delete();
+                    return [x, y];
+                });
+
+                // Find bounds in original space
+                commonAreas[i] = {
+                    minX: Math.min(...corners.map(p => p[0])),
+                    minY: Math.min(...corners.map(p => p[1])),
+                    maxX: Math.max(...corners.map(p => p[0])),
+                    maxY: Math.max(...corners.map(p => p[1]))
+                };
+
+                invH.delete();
+            }
+
+            uploadedImages.forEach((img, index) => {
+                const imageDiv = document.createElement('div');
+                imageDiv.style.marginBottom = '30px';
+                imageDiv.innerHTML = `<h4>Image ${index + 1}</h4>`;
+
+                // Add point coordinates table
+                const coordTable = document.createElement('table');
+                coordTable.style.border = '1px solid #ccc';
+                coordTable.style.borderCollapse = 'collapse';
+                coordTable.style.marginBottom = '10px';
+                coordTable.innerHTML = `
+                    <tr>
+                        <th style="padding: 5px; border: 1px solid #ccc;">Point</th>
+                        <th style="padding: 5px; border: 1px solid #ccc;">X</th>
+                        <th style="padding: 5px; border: 1px solid #ccc;">Y</th>
+                    </tr>
+                    ${points[index].map((point, i) => `
+                        <tr>
+                            <td style="padding: 5px; border: 1px solid #ccc;">${i + 1}</td>
+                            <td style="padding: 5px; border: 1px solid #ccc;">${point[0].toFixed(2)}</td>
+                            <td style="padding: 5px; border: 1px solid #ccc;">${point[1].toFixed(2)}</td>
+                        </tr>
+                    `).join('')}
+                `;
+                imageDiv.appendChild(coordTable);
+
+                const canvas = document.createElement('canvas');
+                canvas.width = img.element.width;
+                canvas.height = img.element.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img.element, 0, 0);
+
+                // Draw points with numbers
+                points[index].forEach((point, i) => {
+                    // Draw point
+                    ctx.beginPath();
+                    ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
+                    ctx.fillStyle = '#ff0000';
+                    ctx.fill();
+
+                    // Draw point number
+                    ctx.font = '12px Arial';
+                    ctx.fillStyle = 'white';
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 2;
+                    ctx.strokeText(`${i + 1}`, point[0] + 5, point[1] - 5);
+                    ctx.fillText(`${i + 1}`, point[0] + 5, point[1] - 5);
+                });
+
+                // Draw rectangle for overlap area
+                const area = commonAreas[index];
+                ctx.strokeStyle = '#00ff00';  // Green color
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 5]);  // Dashed line
+                ctx.beginPath();
+                ctx.rect(
+                    area.minX,
+                    area.minY,
+                    area.maxX - area.minX,
+                    area.maxY - area.minY
+                );
+                ctx.stroke();
+                ctx.setLineDash([]);  // Reset to solid line
+
+                // Add overlap area dimensions
+                const dimensionsText = `Overlap Area: ${(area.maxX - area.minX).toFixed(0)}×${(area.maxY - area.minY).toFixed(0)} pixels`;
+                ctx.font = '14px Arial';
+                ctx.fillStyle = 'white';
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 3;
+                const textX = area.minX;
+                const textY = area.minY - 10;
+                ctx.strokeText(dimensionsText, textX, textY);
+                ctx.fillText(dimensionsText, textX, textY);
+
+                imageDiv.appendChild(canvas);
+                container.appendChild(imageDiv);
+            });
+
+            // Add single download button at the bottom
+            const downloadAllBtn = document.createElement('button');
+            downloadAllBtn.textContent = 'Download All Cropped Images';
+            downloadAllBtn.style.display = 'block';
+            downloadAllBtn.style.margin = '20px auto';
+            downloadAllBtn.style.padding = '12px 24px';
+            downloadAllBtn.style.backgroundColor = '#4CAF50';
+            downloadAllBtn.style.color = 'white';
+            downloadAllBtn.style.border = 'none';
+            downloadAllBtn.style.borderRadius = '4px';
+            downloadAllBtn.style.cursor = 'pointer';
+            downloadAllBtn.style.fontSize = '16px';
+            downloadAllBtn.onclick = function() {
+                // Create a zip file containing all cropped images
+                const zip = new JSZip();
+
+                // Add each cropped image to the zip
+                uploadedImages.forEach((img, index) => {
+                    const area = commonAreas[index];
+                    
+                    // Create a temporary canvas for cropping
+                    const cropCanvas = document.createElement('canvas');
+                    cropCanvas.width = area.maxX - area.minX;
+                    cropCanvas.height = area.maxY - area.minY;
+                    const cropCtx = cropCanvas.getContext('2d');
+
+                    // Draw the cropped portion of the original image
+                    cropCtx.drawImage(img.element,
+                        area.minX, area.minY,  // Source coordinates
+                        area.maxX - area.minX, area.maxY - area.minY,  // Source dimensions
+                        0, 0,  // Destination coordinates
+                        cropCanvas.width, cropCanvas.height  // Destination dimensions
+                    );
+
+                    // Convert canvas to blob and add to zip
+                    const imageData = cropCanvas.toDataURL('image/png').split(',')[1];
+                    zip.file(`cropped_image_${index + 1}.png`, imageData, {base64: true});
+                });
+
+                // Generate and download the zip file
+                zip.generateAsync({type: 'blob'}).then(function(content) {
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(content);
+                    link.download = 'cropped_images.zip';
+                    link.click();
+                });
+            };
+            container.appendChild(downloadAllBtn);
+        }
+
+        alignBtn.addEventListener('click', alignImages);
+        
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+        }
+        
+        function hideError() {
+            error.style.display = 'none';
+        }
+    </script>
+</body>
+</html>
