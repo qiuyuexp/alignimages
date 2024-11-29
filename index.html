@@ -1,50 +1,36 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Retinal Image Alignment (Frontend Only)</title>
+    <title>Retinal Image Alignment</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            margin: 0;
+            max-width: 1200px;
+            margin: 0 auto;
             padding: 20px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            background-color: #f5f5f5;
         }
-        
+
         .container {
             background-color: white;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-        
+
         h1 {
             color: #333;
             text-align: center;
+            margin-bottom: 30px;
         }
-        
+
         .upload-section {
+            margin-bottom: 20px;
             text-align: center;
-            margin: 20px 0;
-            padding: 20px;
-            border: 2px dashed #ccc;
-            border-radius: 8px;
         }
-        
-        .upload-section.dragover {
-            background-color: #e9ecef;
-            border-color: #007bff;
-        }
-        
-        #fileInput {
-            display: none;
-        }
-        
-        .upload-btn {
-            background-color: #007bff;
+
+        .button {
+            background-color: #4CAF50;
             color: white;
             padding: 10px 20px;
             border: none;
@@ -53,142 +39,154 @@
             font-size: 16px;
             margin: 10px;
         }
-        
-        .upload-btn:hover {
-            background-color: #0056b3;
+
+        .button:hover {
+            background-color: #45a049;
         }
-        
-        .upload-btn:disabled {
-            background-color: #ccc;
+
+        .button:disabled {
+            background-color: #cccccc;
             cursor: not-allowed;
         }
-        
-        #preview {
+
+        #imageList {
             display: flex;
             flex-wrap: wrap;
             gap: 10px;
-            margin: 20px 0;
             justify-content: center;
-        }
-        
-        .preview-image {
-            max-width: 200px;
-            max-height: 200px;
-            object-fit: contain;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-        }
-        
-        #result {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            margin: 20px auto;
-            width: 100%;
-        }
-        
-        canvas {
-            max-width: 100%;
-            max-height: 600px;
-        }
-        
-        .loading {
-            display: none;
-            text-align: center;
             margin: 20px 0;
         }
 
+        .thumbnail {
+            max-width: 150px;
+            max-height: 150px;
+            object-fit: contain;
+        }
+
+        .result {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        #resultCanvas {
+            max-width: 100%;
+            height: auto;
+        }
+
         .progress-container {
-            display: none;
-            width: 200px;
-            margin: 10px auto;
-            background-color: #f0f0f0;
-            border-radius: 10px;
-            padding: 3px;
+            width: 100%;
+            margin: 20px 0;
         }
 
         .progress-bar {
             width: 0%;
             height: 20px;
-            background: linear-gradient(45deg, #4CAF50, #45a049);
-            border-radius: 8px;
-            transition: width 0.3s ease;
+            background-color: #4CAF50;
+            border-radius: 10px;
+            transition: width 0.3s ease-in-out;
         }
 
         .progress-text {
-            display: none;
-            margin-top: 10px;
-            font-size: 14px;
-            color: #666;
-        }
-
-        @keyframes pulse {
-            0% { opacity: 0.6; }
-            50% { opacity: 1; }
-            100% { opacity: 0.6; }
-        }
-        
-        .error {
-            color: red;
-            text-align: center;
-            margin: 10px 0;
-            display: none;
-        }
-
-        #alignmentPoints {
-            margin-top: 20px;
-            padding: 10px;
-            background-color: #f8f9fa;
-            border-radius: 4px;
-        }
-
-        .point-set {
-            margin-bottom: 10px;
-            padding: 5px;
-            border-bottom: 1px solid #dee2e6;
-        }
-
-        #status {
             text-align: center;
             margin: 10px 0;
             font-weight: bold;
+        }
+
+        .parameters-panel {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .parameter-group {
+            margin-bottom: 20px;
+        }
+
+        .parameter-group h4 {
+            color: #333;
+            margin: 10px 0;
+            padding-bottom: 5px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .parameter {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+
+        .parameter label {
+            width: 150px;
+            color: #666;
+        }
+
+        .parameter input {
+            width: 100px;
+            padding: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .parameter input:focus {
+            outline: none;
+            border-color: #4CAF50;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Retinal Image Alignment (Frontend Only)</h1>
+        <h1>Retinal Image Alignment</h1>
         
-        <div id="status">Loading OpenCV.js...</div>
-        
-        <div class="upload-section" id="dropZone">
-            <input type="file" id="fileInput" multiple accept="image/*">
-            <button class="upload-btn" onclick="document.getElementById('fileInput').click()" disabled>
-                Select Images
-            </button>
-            <p>or drag and drop images here</p>
-            <p>(Select 2-5 retinal images)</p>
+        <div class="upload-section">
+            <input type="file" id="fileInput" accept="image/*" multiple style="display: none;">
+            <button class="button" onclick="document.getElementById('fileInput').click()">Upload Images</button>
+            <button class="button" id="alignButton" onclick="alignImages()" disabled>Align Images</button>
         </div>
-        
-        <div id="preview"></div>
-        
-        <div style="text-align: center;">
-            <button class="upload-btn" id="alignBtn" style="display: none;">
-                Align Images
-            </button>
-        </div>
-        
-        <div class="loading" id="loading">
-            Processing images... Please wait...
-            <div class="progress-container">
-                <div class="progress-bar" id="progressBar"></div>
+
+        <div class="parameters-panel">
+            <h3>Alignment Parameters</h3>
+            <div class="parameter-group">
+                <h4>Image Processing</h4>
+                <div class="parameter">
+                    <label for="gamma">Gamma Correction:</label>
+                    <input type="number" id="gamma" value="3.0" step="0.1" min="0.1">
+                </div>
+                <div class="parameter">
+                    <label for="cropBottom">Bottom Crop (px):</label>
+                    <input type="number" id="cropBottom" value="75" step="1" min="0">
+                </div>
             </div>
+            
+            <div class="parameter-group">
+                <h4>SIFT Parameters</h4>
+                <div class="parameter">
+                    <label for="flannTrees">FLANN Trees:</label>
+                    <input type="number" id="flannTrees" value="10" step="1" min="1">
+                </div>
+                <div class="parameter">
+                    <label for="flannChecks">FLANN Checks:</label>
+                    <input type="number" id="flannChecks" value="80" step="10" min="10">
+                </div>
+                <div class="parameter">
+                    <label for="matchRatio">Match Ratio:</label>
+                    <input type="number" id="matchRatio" value="0.65" step="0.05" min="0.1" max="1.0">
+                </div>
+                <div class="parameter">
+                    <label for="minMatches">Minimum Matches:</label>
+                    <input type="number" id="minMatches" value="18" step="1" min="4">
+                </div>
+            </div>
+        </div>
+
+        <div id="imageList"></div>
+
+        <div class="progress-container">
+            <div class="progress-bar" id="progressBar"></div>
             <div class="progress-text" id="progressText">Initializing...</div>
         </div>
-        
-        <div class="error" id="error"></div>
-        
+
         <div id="result">
             <canvas id="resultCanvas"></canvas>
         </div>
@@ -206,13 +204,13 @@
 
         function onOpenCvReady() {
             document.getElementById('status').textContent = 'OpenCV.js is ready.';
-            document.querySelector('.upload-btn').disabled = false;
+            document.querySelector('.button').disabled = false;
         }
 
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
-        const preview = document.getElementById('preview');
-        const alignBtn = document.getElementById('alignBtn');
+        const preview = document.getElementById('imageList');
+        const alignBtn = document.getElementById('alignButton');
         const loading = document.getElementById('loading');
         const error = document.getElementById('error');
         const resultCanvas = document.getElementById('resultCanvas');
@@ -263,7 +261,7 @@
                         ctx.drawImage(img, 0, 0);
                         
                         const previewImg = document.createElement('img');
-                        previewImg.classList.add('preview-image');
+                        previewImg.classList.add('thumbnail');
                         previewImg.src = canvas.toDataURL();
                         preview.appendChild(previewImg);
                         
@@ -289,12 +287,27 @@
 
         // Add configuration object for alignment parameters
         const alignmentConfig = {
-            orbFeatures: 13000,        // Increased feature detection
-            matchRatio: 0.65,        // More relaxed matching threshold
+            orbFeatures: 12000,        // Increased feature detection
+            matchRatio: 0.75,        // More relaxed matching threshold
             ransacReprojThreshold: 0.8, // More tolerant of geometric variations
             minMatches: 18,           // Lower minimum matches requirement
             maxFeatures: 12300        // Increased upper limit
         };
+
+        let currentImages = [];
+        alignmentConfig.gamma = 3.0;
+        alignmentConfig.cropBottom = 75;
+        alignmentConfig.flannTrees = 10;
+        alignmentConfig.flannChecks = 80;
+        alignmentConfig.matchRatio = 0.65;
+        alignmentConfig.minMatches = 18;
+
+        // Update config when parameters change
+        document.querySelectorAll('.parameter input').forEach(input => {
+            input.addEventListener('change', (e) => {
+                alignmentConfig[e.target.id] = parseFloat(e.target.value);
+            });
+        });
 
         async function alignImages() {
             if (isProcessing || uploadedImages.length < 2) return;
@@ -345,7 +358,7 @@
                     cv.cvtColor(referenceImg, gray2, cv.COLOR_RGB2GRAY);
 
                     // Crop out 75px from bottom only
-                    const cropBottom = 75;
+                    const cropBottom = alignmentConfig.cropBottom;
                     let cropped1 = gray1.roi(new cv.Rect(
                         0,  // x start from left edge
                         0,  // y start from top edge
@@ -360,7 +373,7 @@
                     ));
 
                     // Apply gamma correction to enhance contrast
-                    const gamma = 3.0; // < 1 makes light areas lighter
+                    const gamma = alignmentConfig.gamma; // < 1 makes light areas lighter
                     const maxVal = 255;
                     const gamma1 = new cv.Mat();
                     const gamma2 = new cv.Mat();
