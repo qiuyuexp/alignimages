@@ -98,6 +98,36 @@
             text-align: center;
             margin: 20px 0;
         }
+
+        .progress-container {
+            display: none;
+            width: 200px;
+            margin: 10px auto;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            padding: 3px;
+        }
+
+        .progress-bar {
+            width: 0%;
+            height: 20px;
+            background: linear-gradient(45deg, #4CAF50, #45a049);
+            border-radius: 8px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            display: none;
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
         
         .error {
             color: red;
@@ -151,6 +181,10 @@
         
         <div class="loading" id="loading">
             Processing images... Please wait...
+            <div class="progress-container">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+            <div class="progress-text" id="progressText">Initializing...</div>
         </div>
         
         <div class="error" id="error"></div>
@@ -158,7 +192,6 @@
         <div id="result">
             <canvas id="resultCanvas"></canvas>
         </div>
-
         <div id="alignmentPoints"></div>
     </div>
 
@@ -256,8 +289,8 @@
 
         // Add configuration object for alignment parameters
         const alignmentConfig = {
-            orbFeatures: 10000,        // Increased feature detection
-            matchRatio: 0.75,        // More relaxed matching threshold
+            orbFeatures: 13000,        // Increased feature detection
+            matchRatio: 0.65,        // More relaxed matching threshold
             ransacReprojThreshold: 0.8, // More tolerant of geometric variations
             minMatches: 18,           // Lower minimum matches requirement
             maxFeatures: 12300        // Increased upper limit
@@ -266,13 +299,34 @@
         async function alignImages() {
             if (isProcessing || uploadedImages.length < 2) return;
             isProcessing = true;
-            loading.style.display = 'block';
             alignBtn.disabled = true;
             hideError();
 
+            const progressContainer = document.querySelector('.progress-container');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+            
+            // Show progress elements
+            loading.style.display = 'block';
+            progressContainer.style.display = 'block';
+            progressText.style.display = 'block';
+            
+            function updateProgress(percent, text) {
+                progressBar.style.width = percent + '%';
+                progressText.textContent = text;
+            }
+
+            // Reset progress bar
+            progressBar.style.width = '0%';
+            updateProgress(0, 'Starting alignment process...');
+
             try {
+                await new Promise(resolve => setTimeout(resolve, 100)); // Small delay to show initial state
+                updateProgress(10, 'Preparing reference image...');
+                // Read and preprocess the reference image
                 const referenceImg = cv.imread(uploadedImages[0].element);
-                const alignedImages = [referenceImg];
+
+                const alignedImages = [referenceImg]; // Keep original for output
                 const alignmentPoints = [[[0, 0], 
                     [referenceImg.cols/2, referenceImg.rows/2],
                     [referenceImg.cols-1, referenceImg.rows-1]]];
@@ -281,19 +335,63 @@
 
                 // Process each image after the reference
                 for (let i = 1; i < uploadedImages.length; i++) {
+                    const progress = 10 + (i / uploadedImages.length) * 70;
+                    updateProgress(progress, `Processing image ${i} of ${uploadedImages.length-1}...`);
+
                     const currentImg = cv.imread(uploadedImages[i].element);
-                    
-                    // Convert to grayscale
                     const gray1 = new cv.Mat();
                     const gray2 = new cv.Mat();
                     cv.cvtColor(currentImg, gray1, cv.COLOR_RGB2GRAY);
                     cv.cvtColor(referenceImg, gray2, cv.COLOR_RGB2GRAY);
 
-                    // Apply Gaussian blur to reduce noise
-                    const blurred1 = new cv.Mat();
-                    const blurred2 = new cv.Mat();
-                    cv.GaussianBlur(gray1, blurred1, new cv.Size(3, 3), 0);
-                    cv.GaussianBlur(gray2, blurred2, new cv.Size(3, 3), 0);
+                    // Crop out 75px from bottom only
+                    const cropBottom = 75;
+                    let cropped1 = gray1.roi(new cv.Rect(
+                        0,  // x start from left edge
+                        0,  // y start from top edge
+                        gray1.cols,  // full width
+                        gray1.rows - cropBottom  // height minus bottom crop
+                    ));
+                    let cropped2 = gray2.roi(new cv.Rect(
+                        0,  // x start from left edge
+                        0,  // y start from top edge
+                        gray2.cols,  // full width
+                        gray2.rows - cropBottom  // height minus bottom crop
+                    ));
+
+                    // Apply gamma correction to enhance contrast
+                    const gamma = 3.0; // < 1 makes light areas lighter
+                    const maxVal = 255;
+                    const gamma1 = new cv.Mat();
+                    const gamma2 = new cv.Mat();
+                    
+                    // Convert to float and normalize to 0-1
+                    cropped1.convertTo(gamma1, cv.CV_32F, 1.0/maxVal);
+                    cropped2.convertTo(gamma2, cv.CV_32F, 1.0/maxVal);
+                    
+                    // Apply power-law transformation
+                    for(let i = 0; i < gamma1.rows; i++) {
+                        for(let j = 0; j < gamma1.cols; j++) {
+                            const pixel = gamma1.floatPtr(i, j);
+                            pixel[0] = Math.pow(pixel[0], gamma) * maxVal;
+                        }
+                    }
+                    for(let i = 0; i < gamma2.rows; i++) {
+                        for(let j = 0; j < gamma2.cols; j++) {
+                            const pixel = gamma2.floatPtr(i, j);
+                            pixel[0] = Math.pow(pixel[0], gamma) * maxVal;
+                        }
+                    }
+                    
+                    // Convert back to 8-bit
+                    gamma1.convertTo(gamma1, cv.CV_8U);
+                    gamma2.convertTo(gamma2, cv.CV_8U);
+
+                    // Clean up cropped mats as we'll use gamma corrected ones
+                    cropped1.delete();
+                    cropped2.delete();
+                    cropped1 = gamma1;
+                    cropped2 = gamma2;
 
                     // Initialize ORB detector with increased number of features
                     const orb = new cv.ORB(alignmentConfig.orbFeatures);
@@ -303,10 +401,24 @@
                     const descriptors1 = new cv.Mat();
                     const descriptors2 = new cv.Mat();
 
-                    // Detect keypoints and compute descriptors
+                    // Detect keypoints and compute descriptors on cropped images
                     const mask = new cv.Mat();
-                    orb.detectAndCompute(blurred1, mask, keypoints1, descriptors1);
-                    orb.detectAndCompute(blurred2, mask, keypoints2, descriptors2);
+                    orb.detectAndCompute(cropped1, mask, keypoints1, descriptors1);
+                    orb.detectAndCompute(cropped2, mask, keypoints2, descriptors2);
+
+                    // Adjust keypoint coordinates (no adjustment needed for x since we're not cropping sides)
+                    for (let j = 0; j < keypoints1.size(); j++) {
+                        const kp = keypoints1.get(j);
+                        if (kp.pt.y >= gray1.rows - cropBottom) {
+                            kp.pt.y = gray1.rows - cropBottom - 1;
+                        }
+                    }
+                    for (let j = 0; j < keypoints2.size(); j++) {
+                        const kp = keypoints2.get(j);
+                        if (kp.pt.y >= gray2.rows - cropBottom) {
+                            kp.pt.y = gray2.rows - cropBottom - 1;
+                        }
+                    }
 
                     // Sort keypoints by response strength
                     const sortedKeypoints1 = Array.from({length: keypoints1.size()}, (_, i) => ({
@@ -393,11 +505,10 @@
                     cv.warpPerspective(currentImg, alignedImg, H, new cv.Size(referenceImg.cols, referenceImg.rows));
                     alignedImages.push(alignedImg);
 
-                    // Cleanup
+                    // Clean up
+                    currentImg.delete();
                     gray1.delete();
                     gray2.delete();
-                    blurred1.delete();
-                    blurred2.delete();
                     descriptors1.delete();
                     descriptors2.delete();
                     keypoints1.delete();
@@ -407,7 +518,8 @@
                     srcPoints.delete();
                     dstPoints.delete();
                     H.delete();
-                    currentImg.delete();
+                    cropped1.delete();  // This now deletes gamma1
+                    cropped2.delete();  // This now deletes gamma2
                 }
 
                 // Create result canvas
@@ -435,8 +547,15 @@
             } catch (err) {
                 console.error(err);
                 showError('Error during alignment: ' + err.message);
+                updateProgress(0, 'Error occurred');
             } finally {
-                loading.style.display = 'none';
+                updateProgress(100, 'Complete!');
+                setTimeout(() => {
+                    loading.style.display = 'none';
+                    progressContainer.style.display = 'none';
+                    progressText.style.display = 'none';
+                    progressBar.style.width = '0%';
+                }, 1000);
                 alignBtn.disabled = false;
                 isProcessing = false;
             }
